@@ -152,7 +152,8 @@ def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
         if r == 3:
             ax.set_xlabel("time [s]")
         if c == 0:
-            ax.set_ylabel("amplitude [m]")
+            continue
+            # ax.set_ylabel("amplitude [m]")
 
     # Single legend outside the axes grid to avoid clutter
     handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -164,14 +165,14 @@ def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
     fig2, ax = plt.subplots(figsize=(10, 4))
     ax.plot(t, ctrls_np)
     ax.set_xlabel("time [s]")
-    ax.set_ylabel("modal force [N]")
+    ax.set_ylabel("modal force")
     ax.set_title("Control forces (all 16 actuators)", fontsize=14)
     ax.grid(True)
 
     force_labels = [f"$F_{{s,{i+1}}}$" for i in range(16)]
     ax.legend(force_labels, ncol=4, fontsize=8, frameon=False)
 
-    # ── Figure 3: rigid-body motion (hub) ───────────────────────
+    # ── Figure 3: rigid-body motion ───────────────────────
     # Infer number of structural modes and build index slices
     n_s = z_ref_np.shape[1]
 
@@ -188,8 +189,7 @@ def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
     for i in range(3):
         axes[0, 0].plot(t, states_np[:, idx_q_u.start + i],
                         label=fr"$q_{{u,{i+1}}}$")
-    axes[0, 0].set_title(r"Hub translation $q_u$")
-    axes[0, 0].set_ylabel("[m]")
+    axes[0, 0].set_title(r"Translation $q_u$")
     axes[0, 0].grid(True, linewidth=0.3, alpha=0.6)
     axes[0, 0].legend(fontsize=8, frameon=False)
 
@@ -197,7 +197,7 @@ def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
     for i in range(3):
         axes[0, 1].plot(t, states_np[:, idx_q_r.start + i],
                         label=fr"$q_{{r,{i+1}}}$")
-    axes[0, 1].set_title(r"Hub rotation $q_r$")
+    axes[0, 1].set_title(r"Rotation $q_r$")
     axes[0, 1].grid(True, linewidth=0.3, alpha=0.6)
     axes[0, 1].legend(fontsize=8, frameon=False)
 
@@ -205,9 +205,8 @@ def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
     for i in range(3):
         axes[1, 0].plot(t, states_np[:, idx_qdot_u.start + i],
                         label=fr"$\dot{{q}}_{{u,{i+1}}}$")
-    axes[1, 0].set_title(r"Hub linear velocity $\dot{q}_u$")
+    axes[1, 0].set_title(r"Linear velocity $\dot{q}_u$")
     axes[1, 0].set_xlabel("time [s]")
-    axes[1, 0].set_ylabel("[m s$^{-1}$]")
     axes[1, 0].grid(True, linewidth=0.3, alpha=0.6)
     axes[1, 0].legend(fontsize=8, frameon=False)
 
@@ -215,12 +214,12 @@ def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
     for i in range(3):
         axes[1, 1].plot(t, states_np[:, idx_qdot_r.start + i],
                         label=fr"$\dot{{q}}_{{r,{i+1}}}$")
-    axes[1, 1].set_title(r"Hub angular velocity $\dot{q}_r$")
+    axes[1, 1].set_title(r"Angular velocity $\dot{q}_r$")
     axes[1, 1].set_xlabel("time [s]")
     axes[1, 1].grid(True, linewidth=0.3, alpha=0.6)
     axes[1, 1].legend(fontsize=8, frameon=False)
 
-    fig3.suptitle("Rigid-body states of the hub", fontsize=14, y=0.98)
+    fig3.suptitle("Rigid-body states of the", fontsize=14, y=0.98)
     fig3.tight_layout(rect=[0, 0, 1, 0.94])
 
     plt.show()
@@ -251,7 +250,7 @@ def run_mpc_demo():
 
     # 2) Create the system
     rom = ROMTest(M=M, Kss=Kss, Bp=Bp, Bh=Bh, Bt=Bt, n_s=ns,
-                     dt=2e-4, n_x=2*(3+3+ns), n_u=ns, integrator="dopri5")
+                     dt=5e-4, n_x=2*(3+3+ns), n_u=ns, integrator="dopri5")
 
     # 3) Prepare a GuSTO config
     # ----- what the controller should look at (z = H x) -------------------
@@ -287,7 +286,7 @@ def run_mpc_demo():
     for i in range(ns):
         x0 = x0.at[6+i].set(random.randint(10,100)/1000)    # initial q_s[i]
 
-    T  = 1000
+    T  = 500
 
     # two sinusoidal references
     t_grid = jnp.arange(T + cfg.N + 1) * rom.dt

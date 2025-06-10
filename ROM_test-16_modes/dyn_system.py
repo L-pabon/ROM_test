@@ -63,17 +63,17 @@ class System(ABC):
             # Autonomuous system ⇒ *t* unused.
             return self.continuous_dynamics(y, u)
 
-        # solver = dfx.Dopri5()  # classical Fehlberg(4) / Dormand–Prince(5)
-        solver = dfx.Kvaerno5()  # more robust, but slower
+        solver = dfx.Dopri5(rtol=1e-6, atol=1e-8)  # classical Fehlberg(4) / Dormand–Prince(5)
+        # solver = dfx.Kvaerno5()  # more robust, but slower
+        print(f"Using Diffrax {solver.__class__.__name__} for adaptive integration.")
         saveat = dfx.SaveAt(t1=self.dt)  # only final state needed
-        stepsize_controller = dfx.PIDController(rtol=1e-6, atol=1e-6)
+        stepsize_controller = dfx.PIDController(rtol=1e-8, atol=1e-8)
 
         sol = dfx.diffeqsolve(
             ode,
             solver,
             t0=0.0,
             t1=self.dt,
-            dt0=self.dt / 10.0,  # conservative first guess
             y0=x,
             saveat=saveat,
             stepsize_controller=stepsize_controller,
