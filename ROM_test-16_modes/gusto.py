@@ -166,6 +166,32 @@ class GuSTO:
             delta_cur = delta  # just for printing
             omega_cur = omega  # just for printing
 
+            # -----------------------------------------------------------
+            # put this one-off probe right before locp.update(...)
+            # -----------------------------------------------------------
+            for j, A in enumerate(A_d):
+                if (~jnp.isfinite(A)).any():
+                    bad_step = j          # horizon index where things blow up
+                    break
+            else:
+                bad_step = None
+
+            if bad_step is not None:
+                # dump the state/control that produced the invalid Jacobian
+                x_bad = self.x_k[bad_step]
+                if u is not None:
+                    # batch vs. single
+                    u_bad = u[bad_step] if getattr(u, "ndim", 1) == 2 else u
+                else:
+                    u_bad = None
+                print(f"⚠️  bad Jacobian at step {bad_step}")
+                print("state =", x_bad)
+                print("input =", u_bad)
+
+
+                # Optionally enter the debugger
+                import pdb; pdb.set_trace()
+                
             # Update the LOCP with new parameters and solve
             if new_solution:
                 self.locp.update(A_d, B_d, d_d, x0, self.x_k, delta, omega, z=z, zf=zf, u=u, Hd=H_d, cd=c_d)

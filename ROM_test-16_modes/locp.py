@@ -106,6 +106,14 @@ class LOCP:
 
             self._problem_setup()
 
+
+
+    def assert_finite_real(self, name, arr):
+        bad = ~jnp.isfinite(arr) | jnp.iscomplex(arr)
+        if bad.any():
+            idx = jnp.argwhere(bad)
+            raise ValueError(f"{name} has {idx.size} invalid entry/entries at {idx[:5]}")
+
     def update(self, Ad, Bd, dd, x0, xk, delta, omega, z=None, zf=None, u=None, full=True, **kwargs):
         """
         Update the potentially changing LOCP data. xk is updated solution trajectory.
@@ -132,6 +140,8 @@ class LOCP:
 
                 # Added observer linearizations here. Make sure to propogate Hd and cd as parameters in kwargs
                 for j in range(self.N):
+                    self.assert_finite_real(f"Ad[{j}]", Ad[j])
+                    self.assert_finite_real(f"Bd[{j}]", Bd[j])
                     self.Ad[j].value = np.asarray(Ad[j])
                     self.Bd[j].value = np.asarray(Bd[j])
 

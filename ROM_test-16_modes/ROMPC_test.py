@@ -20,8 +20,8 @@ np.set_printoptions(threshold=np.inf)
 
 class ROMTest(System):
     def __init__(self, M, Kss, Bp, Bh, Bt, n_s,
-                 dt, n_x, n_u, rk4=False):
-        super().__init__(dt, n_x, n_u, rk4)
+                 dt, n_x, n_u, integrator='rk4'):
+        super().__init__(dt, n_x, n_u, integrator='rk4')
         self.M = M
         self.Muu = M[:3,:3]
         self.Mrr = M[3:6,3:6]
@@ -110,6 +110,122 @@ class ROMTest(System):
         return jax.vmap(self._continuous_single,
                         in_axes=(0, 0))(x, u)
 
+import matplotlib.pyplot as plt
+
+
+def plot_modal_tracking(states, z_ref, ctrls, dt, modal_start_idx: int = 6):
+    """Compact visualization of 16 structural modes + their control forces.
+
+    Parameters
+    ----------
+    states : array-like, shape (T, nx)
+        Closed‑loop state trajectory.
+    z_ref  : array-like, shape (T, 16)
+        Desired reference for each structural mode.
+    ctrls  : array-like, shape (T, 16)
+        Control forces applied to each mode.
+    dt : float
+        Sampling time [s].
+    modal_start_idx : int, default=6
+        Column index of q_{s,1} in *states*.
+    """
+    import numpy as np
+
+    # Convert to NumPy (works for JAX, PyTorch, etc.)
+    states_np = np.asarray(states)
+    z_ref_np = np.asarray(z_ref)
+    ctrls_np = np.asarray(ctrls)
+
+    T = states_np.shape[0]
+    t = np.arange(T) * dt
+
+    # ── Figure 1: 16 modal amplitudes (4×4 grid) ────────────────────────────
+    fig, axes = plt.subplots(4, 4, figsize=(14, 10), sharex=True)
+    for i in range(16):
+        r, c = divmod(i, 4)
+        ax = axes[r, c]
+        ax.plot(t, states_np[:, modal_start_idx + i], label=f"$q_{{s,{i+1}}}$")
+        ax.plot(t, z_ref_np[:T, i], "--", label="ref", linewidth=1)
+        ax.set_title(f"Mode {i+1}", fontsize=10)
+        ax.grid(True, linewidth=0.3, alpha=0.6)
+
+        if r == 3:
+            ax.set_xlabel("time [s]")
+        if c == 0:
+            ax.set_ylabel("amplitude [m]")
+
+    # Single legend outside the axes grid to avoid clutter
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", ncol=2, fontsize=9, frameon=False)
+    fig.suptitle("Structural‑mode tracking with GuSTO MPC", fontsize=14, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+
+    # ── Figure 2: control forces (all actuators in one plot) ────────────────
+    fig2, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(t, ctrls_np)
+    ax.set_xlabel("time [s]")
+    ax.set_ylabel("modal force [N]")
+    ax.set_title("Control forces (all 16 actuators)", fontsize=14)
+    ax.grid(True)
+
+    force_labels = [f"$F_{{s,{i+1}}}$" for i in range(16)]
+    ax.legend(force_labels, ncol=4, fontsize=8, frameon=False)
+
+    # ── Figure 3: rigid-body motion (hub) ───────────────────────
+    # Infer number of structural modes and build index slices
+    n_s = z_ref_np.shape[1]
+
+    idx_q_u    = slice(0, 3)                               # q_u  (0‥2)
+    idx_q_r    = slice(3, 6)                               # q_r  (3‥5)
+    idx_qdot_u = slice(modal_start_idx + n_s,
+                       modal_start_idx + n_s + 3)          # q̇_u
+    idx_qdot_r = slice(modal_start_idx + n_s + 3,
+                       modal_start_idx + n_s + 6)          # q̇_r
+
+    fig3, axes = plt.subplots(2, 2, figsize=(12, 6), sharex=True)
+
+    # ── q_u ────────────────────────────────────────────────────
+    for i in range(3):
+        axes[0, 0].plot(t, states_np[:, idx_q_u.start + i],
+                        label=fr"$q_{{u,{i+1}}}$")
+    axes[0, 0].set_title(r"Hub translation $q_u$")
+    axes[0, 0].set_ylabel("[m]")
+    axes[0, 0].grid(True, linewidth=0.3, alpha=0.6)
+    axes[0, 0].legend(fontsize=8, frameon=False)
+
+    # ── q_r ────────────────────────────────────────────────────
+    for i in range(3):
+        axes[0, 1].plot(t, states_np[:, idx_q_r.start + i],
+                        label=fr"$q_{{r,{i+1}}}$")
+    axes[0, 1].set_title(r"Hub rotation $q_r$")
+    axes[0, 1].grid(True, linewidth=0.3, alpha=0.6)
+    axes[0, 1].legend(fontsize=8, frameon=False)
+
+    # ── q̇_u ───────────────────────────────────────────────────
+    for i in range(3):
+        axes[1, 0].plot(t, states_np[:, idx_qdot_u.start + i],
+                        label=fr"$\dot{{q}}_{{u,{i+1}}}$")
+    axes[1, 0].set_title(r"Hub linear velocity $\dot{q}_u$")
+    axes[1, 0].set_xlabel("time [s]")
+    axes[1, 0].set_ylabel("[m s$^{-1}$]")
+    axes[1, 0].grid(True, linewidth=0.3, alpha=0.6)
+    axes[1, 0].legend(fontsize=8, frameon=False)
+
+    # ── q̇_r ───────────────────────────────────────────────────
+    for i in range(3):
+        axes[1, 1].plot(t, states_np[:, idx_qdot_r.start + i],
+                        label=fr"$\dot{{q}}_{{r,{i+1}}}$")
+    axes[1, 1].set_title(r"Hub angular velocity $\dot{q}_r$")
+    axes[1, 1].set_xlabel("time [s]")
+    axes[1, 1].grid(True, linewidth=0.3, alpha=0.6)
+    axes[1, 1].legend(fontsize=8, frameon=False)
+
+    fig3.suptitle("Rigid-body states of the hub", fontsize=14, y=0.98)
+    fig3.tight_layout(rect=[0, 0, 1, 0.94])
+
+    plt.show()
+
+
 def run_mpc_demo():
     """
     Demonstration of using the ROM with GuSTO-based MPC.
@@ -135,25 +251,25 @@ def run_mpc_demo():
 
     # 2) Create the system
     rom = ROMTest(M=M, Kss=Kss, Bp=Bp, Bh=Bh, Bt=Bt, n_s=ns,
-                     dt=0.001, n_x=2*(3+3+ns), n_u=ns, rk4=True)
+                     dt=2e-4, n_x=2*(3+3+ns), n_u=ns, integrator="dopri5")
 
     # 3) Prepare a GuSTO config
     # ----- what the controller should look at (z = H x) -------------------
     H = jnp.zeros((2*ns, rom.n_x)) # should be 2*ns
+    start_qs  = 6               # start index for q_s
+    start_qds = 6 + ns + 6      # start index for \dot{q}_s
     for i in range(ns):
-        H = H.at[i,6+i].set(1.0)
-
-    for i in range(ns):
-        H = H.at[i+ns,6+ns+i].set(1.0)
+        H = H.at[i,           start_qs  + i].set(1.0)      # q_s
+        H = H.at[i + ns,      start_qds + i].set(1.0)      # \dot{q}_s
 
     Qz  = jnp.diag(jnp.array([10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
                               10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]))  # state cost --> needs extra entries for each mode added
-    Qzf = jnp.diag(jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-                              1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]))  # final state cost
+    Qzf = jnp.diag(jnp.array([10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
+                              10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])) 
     R   = 1e-4 * jnp.eye(ns)    # control effort cost
 
     # characteristic scales (rough guesses)
-    x_char = jnp.ones(rom.n_x)
+    x_char = jnp.ones(rom.n_x)*1e-2
     f_char = jnp.ones(rom.n_x)*1e5
 
     cfg = GuSTOConfig(
@@ -167,11 +283,11 @@ def run_mpc_demo():
     mpc = MPCPolicy(model=rom, config=cfg)
 
     # 5) Set an initial state and define a simple reference path
-    x0 = jnp.zeros(rom.n_x)                                                 # initial state    
+    x0 = jnp.zeros(rom.n_x)                                 # initial state    
     for i in range(ns):
-        x0 = x0.at[6+i].set(random.randint(10,100)/1000)                         # initial q_s[i]
+        x0 = x0.at[6+i].set(random.randint(10,100)/1000)    # initial q_s[i]
 
-    T  = 250                                                                 # 4 s sim
+    T  = 1000
 
     # two sinusoidal references
     t_grid = jnp.arange(T + cfg.N + 1) * rom.dt
@@ -189,8 +305,11 @@ def run_mpc_demo():
     states, ctrls = [], []
     x = x0
     for k in range(T):
+        print(f"Step {k+1}/{T} ... ", end="")
         u, _ = mpc.compute_control(x)
+        # print(f"Control:", u)
         x    = rom.discrete_dynamics(x, u)
+        # print(f"State: {x}")
         states.append(x)
         ctrls.append(u)
 
@@ -198,118 +317,7 @@ def run_mpc_demo():
     ctrls  = jnp.stack(ctrls)       # (T, ns)
 
     # 8) Visualization: compare actual position vs. reference + input forces
-    t_plot = jnp.arange(T) * rom.dt          # time vector
-
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(7, 7), sharex=True,  # share the same x-axis (time)
-        gridspec_kw={"hspace": 0.35})       # vertical spacing
-    
-    fig, (ax3, ax4) = plt.subplots(
-        2, 1, figsize=(7, 7), sharex=True,  # share the same x-axis (time)
-        gridspec_kw={"hspace": 0.35})       # vertical spacing
-    
-    fig, (ax5, ax6) = plt.subplots(
-        2, 1, figsize=(7, 7), sharex=True,  # share the same x-axis (time)
-        gridspec_kw={"hspace": 0.35})       # vertical spacing
-    
-    fig, (ax7, ax8) = plt.subplots(
-        2, 1, figsize=(7, 7), sharex=True,  # share the same x-axis (time)
-        gridspec_kw={"hspace": 0.35})       # vertical spacing
-
-    # ── 1) modal amplitudes [1-4] ──────────────────────────────────────────────
-    ax1.plot(t_plot, states[:, 6], label=r'$q_{s,1}$ (actual)')
-    ax1.plot(t_plot, z_ref[:T, 0], '--',  label=r'$q_{s,1}$ ref')
-    ax1.plot(t_plot, states[:, 7], label=r'$q_{s,2}$ (actual)')
-    ax1.plot(t_plot, z_ref[:T, 1], '--',  label=r'$q_{s,2}$ ref')
-    ax1.plot(t_plot, states[:, 8], label=r'$q_{s,3}$ (actual)')
-    ax1.plot(t_plot, z_ref[:T, 2], '--',  label=r'$q_{s,3}$ ref')
-    ax1.plot(t_plot, states[:, 9], label=r'$q_{s,4}$ (actual)')
-    ax1.plot(t_plot, z_ref[:T, 3], '--',  label=r'$q_{s,4}$ ref')
-    ax1.set_ylabel('modal amplitude [m]')
-    ax1.set_title('Structural-mode tracking with GuSTO MPC')
-    ax1.grid(True);  ax1.legend(loc='upper right', fontsize=8)
-
-    # ── 2) control forces [1-4] ────────────────────────────────────────────────
-    ax2.plot(t_plot, ctrls[:, 0], label=r'$F_{s,1}$')
-    ax2.plot(t_plot, ctrls[:, 1], label=r'$F_{s,2}$')
-    ax2.plot(t_plot, ctrls[:, 2], label=r'$F_{s,3}$')
-    ax2.plot(t_plot, ctrls[:, 3], label=r'$F_{s,4}$')
-    ax2.set_xlabel('time [s]')
-    ax2.set_ylabel('modal force [N]')
-    ax2.set_title('Structural-mode control forces')
-    ax2.grid(True);  ax2.legend()
-
-    # ── 3) modal amplitudes [5-8] ──────────────────────────────────────────────
-    ax3.plot(t_plot, states[:, 10], label=r'$q_{s,5}$ (actual)')
-    ax3.plot(t_plot, z_ref[:T, 4], '--',  label=r'$q_{s,5}$ ref')
-    ax3.plot(t_plot, states[:, 11], label=r'$q_{s,6}$ (actual)')
-    ax3.plot(t_plot, z_ref[:T, 5], '--',  label=r'$q_{s,6}$ ref')
-    ax3.plot(t_plot, states[:, 12], label=r'$q_{s,7}$ (actual)')
-    ax3.plot(t_plot, z_ref[:T, 6], '--',  label=r'$q_{s,7}$ ref')
-    ax3.plot(t_plot, states[:, 13], label=r'$q_{s,8}$ (actual)')
-    ax3.plot(t_plot, z_ref[:T, 7], '--',  label=r'$q_{s,8}$ ref')
-    ax3.set_ylabel('modal amplitude [m]')
-    ax3.set_title('Structural-mode tracking with GuSTO MPC')
-    ax3.grid(True);  ax3.legend(loc='upper right', fontsize=8)
-
-    # ── 4) control forces [5-8] ────────────────────────────────────────────────
-    ax4.plot(t_plot, ctrls[:, 4], label=r'$F_{s,5}$')
-    ax4.plot(t_plot, ctrls[:, 5], label=r'$F_{s,6}$')
-    ax4.plot(t_plot, ctrls[:, 6], label=r'$F_{s,7}$')
-    ax4.plot(t_plot, ctrls[:, 7], label=r'$F_{s,8}$')
-    ax4.set_xlabel('time [s]')
-    ax4.set_ylabel('modal force [N]')
-    ax4.set_title('Structural-mode control forces')
-    ax4.grid(True);  ax4.legend()
-
-    # ── 5) modal amplitudes [9-12] ──────────────────────────────────────────────
-    ax5.plot(t_plot, states[:, 14], label=r'$q_{s,9}$ (actual)')
-    ax5.plot(t_plot, z_ref[:T, 8], '--',  label=r'$q_{s,9}$ ref')
-    ax5.plot(t_plot, states[:, 15], label=r'$q_{s,10}$ (actual)')
-    ax5.plot(t_plot, z_ref[:T, 9], '--',  label=r'$q_{s,10}$ ref')
-    ax5.plot(t_plot, states[:, 16], label=r'$q_{s,11}$ (actual)')
-    ax5.plot(t_plot, z_ref[:T, 10], '--',  label=r'$q_{s,11}$ ref')
-    ax5.plot(t_plot, states[:, 17], label=r'$q_{s,12}$ (actual)')
-    ax5.plot(t_plot, z_ref[:T, 11], '--',  label=r'$q_{s,12}$ ref')
-    ax5.set_ylabel('modal amplitude [m]')
-    ax5.set_title('Structural-mode tracking with GuSTO MPC')
-    ax5.grid(True);  ax5.legend(loc='upper right', fontsize=8)
-
-    # ── 6) control forces [9-12] ────────────────────────────────────────────────
-    ax6.plot(t_plot, ctrls[:, 8], label=r'$F_{s,9}$')
-    ax6.plot(t_plot, ctrls[:, 9], label=r'$F_{s,10}$')
-    ax6.plot(t_plot, ctrls[:, 10], label=r'$F_{s,11}$')
-    ax6.plot(t_plot, ctrls[:, 11], label=r'$F_{s,12}$')
-    ax6.set_xlabel('time [s]')
-    ax6.set_ylabel('modal force [N]')
-    ax6.set_title('Structural-mode control forces')
-    ax6.grid(True);  ax6.legend()
-
-    # ── 7) modal amplitudes [13-16] ──────────────────────────────────────────────
-    ax7.plot(t_plot, states[:, 18], label=r'$q_{s,13}$ (actual)')
-    ax7.plot(t_plot, z_ref[:T, 12], '--',  label=r'$q_{s,13}$ ref')
-    ax7.plot(t_plot, states[:, 19], label=r'$q_{s,14}$ (actual)')
-    ax7.plot(t_plot, z_ref[:T, 13], '--',  label=r'$q_{s,14}$ ref')
-    ax7.plot(t_plot, states[:, 20], label=r'$q_{s,15}$ (actual)')
-    ax7.plot(t_plot, z_ref[:T, 14], '--',  label=r'$q_{s,15}$ ref')
-    ax7.plot(t_plot, states[:, 21], label=r'$q_{s,16}$ (actual)')
-    ax7.plot(t_plot, z_ref[:T, 15], '--',  label=r'$q_{s,16}$ ref')
-    ax7.set_ylabel('modal amplitude [m]')
-    ax7.set_title('Structural-mode tracking with GuSTO MPC')
-    ax7.grid(True);  ax7.legend(loc='upper right', fontsize=8)
-
-    # ── 8) control forces [13-16] ────────────────────────────────────────────────
-    ax8.plot(t_plot, ctrls[:, 12], label=r'$F_{s,13}$')
-    ax8.plot(t_plot, ctrls[:, 13], label=r'$F_{s,14}$')
-    ax8.plot(t_plot, ctrls[:, 14], label=r'$F_{s,15}$')
-    ax8.plot(t_plot, ctrls[:, 15], label=r'$F_{s,16}$')
-    ax8.set_xlabel('time [s]')
-    ax8.set_ylabel('modal force [N]')
-    ax8.set_title('Structural-mode control forces')
-    ax8.grid(True);  ax8.legend()
-
-    plt.tight_layout()
-    plt.show()
+    plot_modal_tracking(states, z_ref[:T], ctrls, rom.dt)
 
 
 if __name__ == "__main__":

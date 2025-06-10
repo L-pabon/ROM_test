@@ -3,15 +3,22 @@ import torch
 from abc import ABC, abstractmethod 
 import jax
 import jax.numpy as jnp
-from typing import Union, Tuple
+from typing import Union, Tuple, Callable
 from functools import partial
+Array = Union[jnp.ndarray]
+
+import diffrax as dfx
 
 class System(ABC):
-    def __init__(self, dt, n_x, n_u, rk4=False):
-        self.dt = dt
-        self.n_x = n_x
-        self.n_u = n_u
-        self.rk4 = rk4
+    def __init__(self, dt: float, n_x: int, n_u: int, *, integrator: str = "euler"):
+        self.dt = float(dt)
+        self.n_x = int(n_x)
+        self.n_u = int(n_u)
+
+        integrator = integrator.lower()
+        if integrator not in {"euler", "rk4", "dopri5"}:
+            raise ValueError(f"Unsupported integrator '{integrator}'")
+        self.integrator = integrator
 
     @abstractmethod
     def continuous_dynamics(self, x: Union[np.ndarray, jnp.ndarray], u: Union[np.ndarray, jnp.ndarray]) -> Union[np.ndarray, jnp.ndarray]:
@@ -27,29 +34,75 @@ class System(ABC):
         """
         pass
 
-    def discrete_dynamics(self, x: Union[np.ndarray,jnp.ndarray], u: Union[np.ndarray,jnp.ndarray]) -> Union[np.ndarray,jnp.ndarray]:
-        """
-        Compute the discrete time dynamics x_{k+1} = f_d(x_k, u_k) using RK4 integration.
-        
-        Args:
-            x: Current state vector of shape (N, n_x)
-            u: Current control input vector of shape (N, n_u)
-            dt: Time step
-            
-        Returns:
-            x_next: Next state vector of shape (N, n_x)
-        """
-        # RK4 integration
-        if self.rk4:
-            k1 = self.continuous_dynamics(x, u)
-            k2 = self.continuous_dynamics(x + 0.5*self.dt*k1, u)
-            k3 = self.continuous_dynamics(x + 0.5*self.dt*k2, u)
-            k4 = self.continuous_dynamics(x + self.dt*k3, u)
+    # ------------------------------------------------------------------
+    # Fixed‑step integrators (Euler / RK4)
+    # ------------------------------------------------------------------
+    def _euler_step(self, x: Array, u: Array) -> Array:
+        return x + self.dt * self.continuous_dynamics(x, u)
 
-            return x + (self.dt/6) * (k1 + 2*k2 + 2*k3 + k4)
-        # Euler
-        else:
-            return x + self.continuous_dynamics(x, u) * self.dt
+    def _rk4_step(self, x: Array, u: Array) -> Array:
+        k1 = self.continuous_dynamics(x, u)
+        k2 = self.continuous_dynamics(x + 0.5 * self.dt * k1, u)
+        k3 = self.continuous_dynamics(x + 0.5 * self.dt * k2, u)
+        k4 = self.continuous_dynamics(x + self.dt * k3, u)
+        return x + (self.dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+    # ------------------------------------------------------------------
+    # Adaptive Diffrax step (Dormand–Prince 5)
+    # ------------------------------------------------------------------
+    def _dopri5_single(self, x: Array, u: Array) -> Array:
+        """One adaptive step over :math:`[0, dt]` using Diffrax.
+
+        The solver is JIT‑friendly and fully differentiable.  Internally the
+        step size is adjusted to keep the local error below Diffrax defaults
+        (``rtol=atol=1e‑5``); you can tweak via ``solver=…`` or ``stepsize_controller``
+        if needed.
+        """
+
+        def ode(t, y, args):
+            # Autonomuous system ⇒ *t* unused.
+            return self.continuous_dynamics(y, u)
+
+        # solver = dfx.Dopri5()  # classical Fehlberg(4) / Dormand–Prince(5)
+        solver = dfx.Kvaerno5()  # more robust, but slower
+        saveat = dfx.SaveAt(t1=self.dt)  # only final state needed
+        stepsize_controller = dfx.PIDController(rtol=1e-6, atol=1e-6)
+
+        sol = dfx.diffeqsolve(
+            ode,
+            solver,
+            t0=0.0,
+            t1=self.dt,
+            dt0=self.dt / 10.0,  # conservative first guess
+            y0=x,
+            saveat=saveat,
+            stepsize_controller=stepsize_controller,
+            max_steps=8_192,     # safety against endless loops during AD
+        )
+        return sol.ys[0]
+    
+    # ------------------------------------------------------------------
+    # Public discrete map f_d(x_k, u_k)
+    # ------------------------------------------------------------------
+    def discrete_dynamics(self, x: Array, u: Array) -> Array:
+        """Compute :math:`x_{k+1}` from *x_k*, *u_k* using the selected scheme.
+
+        Works for both single states ``(n_x,)`` and batches ``(B, n_x)``.
+        """
+
+        # Choose kernel for a *single* sample --------------------------------
+        if self.integrator == "euler":
+            step_fn: Callable[[Array, Array], Array] = self._euler_step
+        elif self.integrator == "rk4":
+            step_fn = self._rk4_step
+        else:  # "dopri5"
+            step_fn = self._dopri5_single
+
+        # Vectorise if necessary --------------------------------------------
+        if x.ndim == 1:  # (n_x,)
+            return step_fn(x, u)
+        else:            # (B, n_x)
+            return jax.vmap(step_fn, in_axes=(0, 0))(x, u)
         
     def multistep_dynamics(self, x: Union[np.ndarray, jnp.ndarray], controls: Union[np.ndarray, jnp.ndarray]) -> Union[np.ndarray,jnp.ndarray]:
         """Repeatedly apply the discrete dynamics to get an (N+1 x n_x) array of states."""

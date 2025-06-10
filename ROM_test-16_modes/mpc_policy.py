@@ -83,7 +83,7 @@ class MPCPolicy():
             U=self.U,
             dU=self.dU,
             start_with_solve=start_with_solve,
-            solver='CLARABEL'
+            solver='OSQP'
         )
 
         # Get initial solution x_opt (N+1 x n), u_opt (N x m)
